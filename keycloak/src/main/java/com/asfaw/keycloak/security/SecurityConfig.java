@@ -19,9 +19,24 @@ public class SecurityConfig {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
+                        // Public endpoints
                         .requestMatchers("/public/**").permitAll()
+                        .requestMatchers("/api/auth/login").permitAll()
+                        .requestMatchers("/api/auth/register").permitAll()
+                        .requestMatchers("/api/auth/forgot-password").permitAll()
+                        .requestMatchers("/api/auth/refresh").permitAll()
+
+                        // Protected endpoints
+                        .requestMatchers("/api/auth/logout").authenticated()
+                        .requestMatchers("/api/auth/me").authenticated()
+                        .requestMatchers("/api/auth/verify-email").authenticated()
+                        .requestMatchers("/api/auth/change-password").authenticated()
+
+                        // Role-based endpoints
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .requestMatchers("/user/**").hasRole("USER")
+
+                        // Any other request
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 ->
