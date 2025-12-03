@@ -15,5 +15,6 @@ public class TestController {
     public String secureHello() {
         return "Secure OK";
     }
+
 }
 
