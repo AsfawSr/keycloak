@@ -18,4 +18,5 @@ public class KeycloakApplication {
     public String publicLogin() {
         return "login";
     }
+
 }
