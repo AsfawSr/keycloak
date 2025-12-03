@@ -14,7 +14,7 @@ public class KeycloakApplication {
         SpringApplication.run(KeycloakApplication.class, args);
     }
 
-    @GetMapping("/Public/login")
+    @GetMapping("/public/login")
     public String publicLogin() {
         return "login";
     }
