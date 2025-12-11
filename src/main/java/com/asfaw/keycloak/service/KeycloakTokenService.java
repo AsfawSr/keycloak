@@ -23,7 +23,7 @@ public class KeycloakTokenService {
     @Value("${keycloak.admin-client-id:admin-cli}")
     private String adminClientId;
 
-    @Value("${keycloak.admin-client-secret}")
+    @Value("q4yVaZ2P6vc1ApJkrSyDQ8DNgaEkLSQI")
     private String adminClientSecret;
 
     private final RestTemplate restTemplate = new RestTemplate();
