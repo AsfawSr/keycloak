@@ -111,8 +111,6 @@ public class AuthService {
                 UserResponse createdUser = getUserByEmail(registerRequest.getEmail());
 
                 if (createdUser != null) {
-                    // 3. Assign default USER role (optional - depends on your setup)
-                    // 4. Send verification email
                     keycloakAdminClient.sendVerificationEmail(adminToken, createdUser.getId());
 
                     return ResponseEntity.status(HttpStatus.CREATED)

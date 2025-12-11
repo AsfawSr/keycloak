@@ -8,15 +8,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 @SpringBootApplication
 @EnableFeignClients
-@RestController
 public class KeycloakApplication {
     public static void main(String[] args) {
         SpringApplication.run(KeycloakApplication.class, args);
     }
-
-    @GetMapping("/public/login")
-    public String publicLogin() {
-        return "login";
-    }
-
 }
