@@ -20,13 +20,13 @@ public class KeycloakTokenService {
     @Value("${keycloak.realm}")
     private String realm;
 
-    @Value("${keycloak.admin-client-id:admin-cli}")
+    @Value("${keycloak.admin-client-id}")
     private String adminClientId;
 
-    @Value("q4yVaZ2P6vc1ApJkrSyDQ8DNgaEkLSQI")
+    @Value("${keycloak.admin-client-secret}")  // FIXED: Remove hardcoded value
     private String adminClientSecret;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
 
     public String getAdminAccessToken() {
         String url = authServerUrl + "/realms/" + realm + "/protocol/openid-connect/token";
@@ -41,12 +41,16 @@ public class KeycloakTokenService {
 
         HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
 
-        ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
 
-        if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-            return (String) response.getBody().get("access_token");
+            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+                return (String) response.getBody().get("access_token");
+            }
+
+            throw new RuntimeException("Failed to get admin token. Status: " + response.getStatusCode());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get admin access token: " + e.getMessage(), e);
         }
-
-        throw new RuntimeException("Failed to get admin access token. Status: " + response.getStatusCode());
     }
 }
