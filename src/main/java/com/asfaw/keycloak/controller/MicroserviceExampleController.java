@@ -43,7 +43,6 @@ public class MicroserviceExampleController {
         TokenDownscopeResponse response = tokenDownscopingService.downscopeToken(request);
         
         return ResponseEntity.ok()
-                .header("X-Downscoped-Token", response.getDownscopedToken())
                 .header("X-Target-Service", response.getTargetService())
                 .body(response);
     }
@@ -128,40 +127,40 @@ public class MicroserviceExampleController {
     }
 
     /**
-     * Example: Get tokens for multiple services (for complex workflows)
+     * Example: Get tokens for multiple services (for complex workflows).
+     * Each exchange is isolated — partial failures are reported without leaving orphaned tokens.
      */
     @PostMapping("/workflow-tokens")
-    public ResponseEntity<Map<String, TokenDownscopeResponse>> getWorkflowTokens(
-            @AuthenticationPrincipal Jwt jwt) {
-        
-        // Get tokens for multiple services needed in a workflow
-        TokenDownscopeRequest orderRequest = TokenDownscopeRequest.builder()
-                .originalToken(jwt.getTokenValue())
-                .targetService("order-service")
-                .requiredScopes(Arrays.asList("read:orders", "write:orders"))
-                .build();
+    public ResponseEntity<?> getWorkflowTokens(@AuthenticationPrincipal Jwt jwt) {
 
-        TokenDownscopeRequest paymentRequest = TokenDownscopeRequest.builder()
-                .originalToken(jwt.getTokenValue())
-                .targetService("payment-service")
-                .requiredScopes(Arrays.asList("read:payments", "write:payments"))
-                .build();
+        Map<String, TokenDownscopeResponse> tokens = new java.util.LinkedHashMap<>();
+        Map<String, String> errors = new java.util.LinkedHashMap<>();
 
-        TokenDownscopeRequest notificationRequest = TokenDownscopeRequest.builder()
-                .originalToken(jwt.getTokenValue())
-                .targetService("notification-service")
-                .requiredScopes(Arrays.asList("send:notifications"))
-                .build();
+        Map<String, List<String>> serviceScopes = Map.of(
+            "order-service",        Arrays.asList("read:orders", "write:orders"),
+            "payment-service",      Arrays.asList("read:payments", "write:payments"),
+            "notification-service", Arrays.asList("send:notifications")
+        );
 
-        TokenDownscopeResponse orderToken = tokenDownscopingService.downscopeToken(orderRequest);
-        TokenDownscopeResponse paymentToken = tokenDownscopingService.downscopeToken(paymentRequest);
-        TokenDownscopeResponse notificationToken = tokenDownscopingService.downscopeToken(notificationRequest);
+        for (Map.Entry<String, List<String>> entry : serviceScopes.entrySet()) {
+            String service = entry.getKey();
+            try {
+                TokenDownscopeRequest req = TokenDownscopeRequest.builder()
+                        .originalToken(jwt.getTokenValue())
+                        .targetService(service)
+                        .requiredScopes(entry.getValue())
+                        .build();
+                tokens.put(service, tokenDownscopingService.downscopeToken(req));
+            } catch (Exception e) {
+                log.error("Failed to downscope token for service {}: {}", service, e.getMessage());
+                errors.put(service, e.getMessage());
+            }
+        }
 
-        return ResponseEntity.ok(Map.of(
-            "orderService", orderToken,
-            "paymentService", paymentToken,
-            "notificationService", notificationToken
-        ));
+        if (!errors.isEmpty()) {
+            return ResponseEntity.status(207).body(Map.of("tokens", tokens, "errors", errors));
+        }
+        return ResponseEntity.ok(tokens);
     }
 
     /**

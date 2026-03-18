@@ -61,41 +61,43 @@ public class TokenDownscopingController {
     }
 
     /**
-     * Validate a downscoped token
+     * Validate a downscoped token via Keycloak introspection
      */
     @PostMapping("/validate")
     public ResponseEntity<Map<String, Object>> validateDownscopedToken(
             @RequestBody Map<String, String> request) {
-        
+
         String token = request.get("token");
         if (token == null || token.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("valid", false, "error", "Token is required"));
         }
 
-        // This would integrate with your token validation logic
-        // For now, returning a basic response
-        return ResponseEntity.ok(Map.of(
-            "valid", true,
-            "message", "Token validation endpoint - implement full validation logic"
-        ));
+        boolean valid = tokenDownscopingService.validateOriginalToken(token);
+        if (valid) {
+            return ResponseEntity.ok(Map.of("valid", true));
+        } else {
+            return ResponseEntity.ok(Map.of("valid", false, "error", "Token is invalid or expired"));
+        }
     }
 
     /**
-     * Revoke a downscoped token
+     * Revoke a downscoped token via Keycloak revocation endpoint
      */
     @PostMapping("/revoke")
     public ResponseEntity<Map<String, String>> revokeDownscopedToken(
             @RequestBody Map<String, String> request) {
-        
+
         String token = request.get("token");
         if (token == null || token.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
         }
 
-        // This would integrate with Keycloak's token revocation endpoint
-        // For now, returning a basic response
-        return ResponseEntity.ok(Map.of(
-            "message", "Token revocation endpoint - implement full revocation logic"
-        ));
+        try {
+            tokenDownscopingService.revokeToken(token);
+            return ResponseEntity.ok(Map.of("message", "Token revoked successfully"));
+        } catch (Exception e) {
+            log.error("Token revocation failed: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", "Token revocation failed"));
+        }
     }
 }
