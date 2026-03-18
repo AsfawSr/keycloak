@@ -3,7 +3,9 @@ package com.asfaw.keycloak.controller;
 import com.asfaw.keycloak.dto.TokenDownscopeRequest;
 import com.asfaw.keycloak.dto.TokenDownscopeResponse;
 import com.asfaw.keycloak.service.TokenDownscopingService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.validation.annotation.Validated;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -16,6 +18,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/tokens")
 @RequiredArgsConstructor
+@Validated
 @Slf4j
 public class TokenDownscopingController {
 
@@ -27,7 +30,7 @@ public class TokenDownscopingController {
     @PostMapping("/downscope")
     public ResponseEntity<TokenDownscopeResponse> downscopeToken(
             @AuthenticationPrincipal Jwt jwt,
-            @RequestBody TokenDownscopeRequest request) {
+            @Valid @RequestBody TokenDownscopeRequest request) {
         
         // Set the original token from the current authentication
         request.setOriginalToken(jwt.getTokenValue());

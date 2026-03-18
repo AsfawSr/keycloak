@@ -2,6 +2,7 @@ package com.asfaw.keycloak.service;
 
 import com.asfaw.keycloak.client.KeycloakAdminClient;
 import com.asfaw.keycloak.dto.*;
+import com.asfaw.keycloak.util.TokenUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -70,8 +71,8 @@ public class AuthService {
                         .accessToken(accessToken)
                         .refreshToken(refreshToken)
                         .tokenType((String) tokenData.get("token_type"))
-                        .expiresIn(getLongValue(tokenData.get("expires_in")))
-                        .refreshExpiresIn(getLongValue(tokenData.get("refresh_expires_in")))
+                        .expiresIn(TokenUtils.toLong(tokenData.get("expires_in")))
+                        .refreshExpiresIn(TokenUtils.toLong(tokenData.get("refresh_expires_in")))
                         .sessionState((String) tokenData.get("session_state"))
                         .userId(user != null ? user.getId() : null)
                         .username(user != null ? user.getUsername() : authRequest.getUsername())
@@ -199,8 +200,8 @@ public class AuthService {
                         .accessToken(newAccessToken)
                         .refreshToken(newRefreshToken)
                         .tokenType((String) tokenData.get("token_type"))
-                        .expiresIn(getLongValue(tokenData.get("expires_in")))
-                        .refreshExpiresIn(getLongValue(tokenData.get("refresh_expires_in")))
+                        .expiresIn(TokenUtils.toLong(tokenData.get("expires_in")))
+                        .refreshExpiresIn(TokenUtils.toLong(tokenData.get("refresh_expires_in")))
                         .sessionState((String) tokenData.get("session_state"))
                         .userId(user != null ? user.getId() : null)
                         .username(user != null ? user.getUsername() : null)
@@ -400,47 +401,4 @@ public class AuthService {
         }
     }
 
-    /**
-     * Safely convert Number to Long
-     */
-    private Long getLongValue(Object number) {
-        if (number == null) return null;
-        if (number instanceof Number) {
-            return ((Number) number).longValue();
-        }
-        try {
-            return Long.parseLong(number.toString());
-        } catch (NumberFormatException e) {
-            log.warn("Could not convert {} to Long", number);
-            return null;
-        }
-    }
-
-    /**
-     * Validate token with Keycloak (optional)
-     */
-    public boolean validateToken(String token) {
-        String introspectUrl = authServerUrl + "/realms/" + realm + "/protocol/openid-connect/token/introspect";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-        body.add("client_id", clientId);
-        body.add("client_secret", clientSecret);
-        body.add("token", token);
-
-        HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
-
-        try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(introspectUrl, request, Map.class);
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Boolean active = (Boolean) response.getBody().get("active");
-                return active != null && active;
-            }
-        } catch (Exception e) {
-            log.error("Token validation failed: {}", e.getMessage());
-        }
-        return false;
-    }
 }

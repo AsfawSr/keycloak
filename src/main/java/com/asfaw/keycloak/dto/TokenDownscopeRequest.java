@@ -1,5 +1,6 @@
 package com.asfaw.keycloak.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -13,9 +14,12 @@ import java.util.List;
 @AllArgsConstructor
 public class TokenDownscopeRequest {
     private String originalToken;
-    private String targetService; // Target microservice name
-    private List<String> requiredScopes; // Specific scopes needed
-    private List<String> requiredRoles; // Specific roles needed
-    private Integer expiresIn; // Custom expiration (optional)
-    private String audience; // Target audience (optional)
+
+    @NotBlank(message = "targetService must not be blank")
+    private String targetService;
+
+    private List<String> requiredScopes;
+    private List<String> requiredRoles;
+    private Integer expiresIn;
+    private String audience;
 }

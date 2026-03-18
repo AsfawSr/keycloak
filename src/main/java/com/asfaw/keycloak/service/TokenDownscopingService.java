@@ -1,8 +1,10 @@
 package com.asfaw.keycloak.service;
 
+import com.asfaw.keycloak.config.ServiceScopeProperties;
 import com.asfaw.keycloak.dto.TokenDownscopeRequest;
 import com.asfaw.keycloak.dto.TokenDownscopeResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.asfaw.keycloak.util.TokenUtils;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,56 +43,30 @@ public class TokenDownscopingService {
     private int defaultExpiration;
 
     private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
-
-    // Predefined service scopes configuration
-    private static final Map<String, List<String>> SERVICE_SCOPES = Map.of(
-        "order-service", List.of("read:orders", "write:orders"),
-        "payment-service", List.of("read:payments", "write:payments"),
-        "user-service", List.of("read:users", "write:users"),
-        "inventory-service", List.of("read:inventory", "write:inventory"),
-        "notification-service", List.of("send:notifications")
-    );
-
-    // Predefined service roles configuration
-    private static final Map<String, List<String>> SERVICE_ROLES = Map.of(
-        "order-service", List.of("ORDER_USER", "ORDER_ADMIN"),
-        "payment-service", List.of("PAYMENT_USER", "PAYMENT_ADMIN"),
-        "user-service", List.of("USER_MANAGER"),
-        "admin-service", List.of("ADMIN", "SUPER_ADMIN")
-    );
+    private final ServiceScopeProperties serviceScopeProperties;
 
     /**
-     * Creates a downscoped token for a specific microservice
+     * Creates a downscoped token for a specific microservice.
+     * Rate-limited to prevent Keycloak from being hammered.
      */
+    @RateLimiter(name = "downscopeToken")
     public TokenDownscopeResponse downscopeToken(TokenDownscopeRequest request) {
-        try {
-            log.info("Downscoping token for service: {}", request.getTargetService());
+        log.info("Downscoping token for service: {}", request.getTargetService());
 
-            // Validate original token
-            if (!validateOriginalToken(request.getOriginalToken())) {
-                throw new RuntimeException("Invalid or expired original token");
-            }
-
-            // Determine scopes and roles for target service
-            List<String> targetScopes = determineTargetScopes(request);
-            List<String> targetRoles = determineTargetRoles(request);
-
-            // Create downscoped token using Keycloak's token exchange
-            TokenDownscopeResponse response = performTokenExchange(request, targetScopes, targetRoles);
-
-            log.info("Successfully downscoped token for service: {}", request.getTargetService());
-            return response;
-
-        } catch (Exception e) {
-            log.error("Token downscoping failed for service {}: {}", 
-                    request.getTargetService(), e.getMessage(), e);
-            throw new RuntimeException("Token downscoping failed: " + e.getMessage(), e);
+        if (!validateOriginalToken(request.getOriginalToken())) {
+            throw new RuntimeException("Invalid or expired original token");
         }
+
+        List<String> targetScopes = determineTargetScopes(request);
+        List<String> targetRoles = determineTargetRoles(request);
+
+        TokenDownscopeResponse response = performTokenExchange(request, targetScopes, targetRoles);
+        log.info("Successfully downscoped token for service: {}", request.getTargetService());
+        return response;
     }
 
     /**
-     * Validates a token with Keycloak introspection. Public so controllers can use it.
+     * Validates a token via Keycloak introspection.
      */
     public boolean validateOriginalToken(String token) {
         try {
@@ -104,152 +80,17 @@ public class TokenDownscopingService {
             body.add("client_secret", clientSecret);
             body.add("token", token);
 
-            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    introspectUrl, new HttpEntity<>(body, headers), Map.class);
 
-            ResponseEntity<Map> response = restTemplate.postForEntity(introspectUrl, request, Map.class);
-            
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Boolean active = (Boolean) response.getBody().get("active");
-                return active != null && active;
+                return Boolean.TRUE.equals(active);
             }
         } catch (Exception e) {
             log.warn("Token validation failed: {}", e.getMessage());
         }
         return false;
-    }
-
-    /**
-     * Determines the scopes to include in the downscoped token.
-     * Uses explicitly requested scopes when provided; falls back to predefined
-     * service scopes only when no scopes are requested — preventing unintended scope creep.
-     */
-    private List<String> determineTargetScopes(TokenDownscopeRequest request) {
-        List<String> scopes = new ArrayList<>();
-
-        if (request.getRequiredScopes() != null && !request.getRequiredScopes().isEmpty()) {
-            // Validate requested scopes are a subset of what the service allows
-            List<String> allowedScopes = SERVICE_SCOPES.getOrDefault(request.getTargetService(), Collections.emptyList());
-            for (String scope : request.getRequiredScopes()) {
-                if (allowedScopes.contains(scope)) {
-                    scopes.add(scope);
-                } else {
-                    log.warn("Requested scope '{}' is not allowed for service '{}', skipping",
-                            scope, request.getTargetService());
-                }
-            }
-        } else {
-            // No scopes requested — fall back to predefined service scopes
-            List<String> serviceScopes = SERVICE_SCOPES.get(request.getTargetService());
-            if (serviceScopes != null) {
-                scopes.addAll(serviceScopes);
-            }
-        }
-
-        // Always include OIDC base scopes
-        scopes.add("openid");
-        scopes.add("profile");
-        scopes.add("email");
-
-        return scopes.stream().distinct().collect(Collectors.toList());
-    }
-
-    /**
-     * Determines the roles to include in the downscoped token.
-     * Uses explicitly requested roles when provided; falls back to predefined
-     * service roles only when none are requested.
-     */
-    private List<String> determineTargetRoles(TokenDownscopeRequest request) {
-        List<String> roles = new ArrayList<>();
-
-        if (request.getRequiredRoles() != null && !request.getRequiredRoles().isEmpty()) {
-            // Validate requested roles are a subset of what the service allows
-            List<String> allowedRoles = SERVICE_ROLES.getOrDefault(request.getTargetService(), Collections.emptyList());
-            for (String role : request.getRequiredRoles()) {
-                if (allowedRoles.contains(role)) {
-                    roles.add(role);
-                } else {
-                    log.warn("Requested role '{}' is not allowed for service '{}', skipping",
-                            role, request.getTargetService());
-                }
-            }
-        } else {
-            // No roles requested — fall back to predefined service roles
-            List<String> serviceRoles = SERVICE_ROLES.get(request.getTargetService());
-            if (serviceRoles != null) {
-                roles.addAll(serviceRoles);
-            }
-        }
-
-        return roles.stream().distinct().collect(Collectors.toList());
-    }
-
-    /**
-     * Performs token exchange with Keycloak to create downscoped token
-     */
-    private TokenDownscopeResponse performTokenExchange(TokenDownscopeRequest request, 
-                                                        List<String> scopes, List<String> roles) {
-        String tokenUrl = authServerUrl + "/realms/" + realm + "/protocol/openid-connect/token";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-        body.add("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange");
-        body.add("client_id", clientId);
-        body.add("client_secret", clientSecret);
-        body.add("subject_token", request.getOriginalToken());
-        body.add("requested_token_type", "urn:ietf:params:oauth:token-type:jwt");
-        
-        // Add scopes
-        if (!scopes.isEmpty()) {
-            body.add("scope", String.join(" ", scopes));
-        }
-
-        // Add audience if specified
-        if (request.getAudience() != null) {
-            body.add("audience", request.getAudience());
-        } else {
-            // Use service name as default audience
-            body.add("audience", request.getTargetService());
-        }
-
-        // Add custom expiration if specified, capped at max-expiration
-        int expiry = defaultExpiration;
-        if (request.getExpiresIn() != null) {
-            expiry = Math.min(request.getExpiresIn(), maxExpiration);
-            if (request.getExpiresIn() > maxExpiration) {
-                log.warn("Requested expiration {}s exceeds max {}s, capping to max", request.getExpiresIn(), maxExpiration);
-            }
-        }
-        body.add("requested_expiration", String.valueOf(expiry));
-
-        HttpEntity<MultiValueMap<String, String>> exchangeRequest = new HttpEntity<>(body, headers);
-
-        try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(tokenUrl, exchangeRequest, Map.class);
-
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Map<String, Object> tokenData = response.getBody();
-                
-                return TokenDownscopeResponse.builder()
-                        .downscopedToken((String) tokenData.get("access_token"))
-                        .tokenType((String) tokenData.get("token_type"))
-                        .expiresIn(getLongValue(tokenData.get("expires_in")))
-                        .grantedScopes(scopes)
-                        .grantedRoles(roles)
-                        .audience(request.getAudience() != null ? request.getAudience() : request.getTargetService())
-                        .targetService(request.getTargetService())
-                        .issuedAt(Instant.now().toString())
-                        .build();
-            }
-
-            throw new RuntimeException("Token exchange failed with status: " + response.getStatusCode());
-
-        } catch (HttpClientErrorException e) {
-            log.error("Token exchange failed: Status={}, Response={}", 
-                    e.getStatusCode(), e.getResponseBodyAsString());
-            throw new RuntimeException("Token exchange failed: " + e.getResponseBodyAsString());
-        }
     }
 
     /**
@@ -266,9 +107,8 @@ public class TokenDownscopingService {
         body.add("client_secret", clientSecret);
         body.add("token", token);
 
-        HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
         try {
-            restTemplate.postForEntity(revokeUrl, request, Void.class);
+            restTemplate.postForEntity(revokeUrl, new HttpEntity<>(body, headers), Void.class);
             log.info("Token revoked successfully");
         } catch (Exception e) {
             log.error("Token revocation failed: {}", e.getMessage());
@@ -276,33 +116,120 @@ public class TokenDownscopingService {
         }
     }
 
-    /**
-     * Get available scopes for a service
-     */
     public List<String> getServiceScopes(String serviceName) {
-        return SERVICE_SCOPES.getOrDefault(serviceName, Collections.emptyList());
+        return serviceScopeProperties.getScopes().getOrDefault(serviceName, Collections.emptyList());
     }
 
-    /**
-     * Get available roles for a service
-     */
     public List<String> getServiceRoles(String serviceName) {
-        return SERVICE_ROLES.getOrDefault(serviceName, Collections.emptyList());
+        return serviceScopeProperties.getRoles().getOrDefault(serviceName, Collections.emptyList());
+    }
+
+    // ── private helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Validates requested scopes against the allowed list for the target service.
+     * Falls back to all predefined scopes only when none are explicitly requested.
+     * Throws if no valid service scopes remain after filtering.
+     */
+    private List<String> determineTargetScopes(TokenDownscopeRequest request) {
+        List<String> allowedScopes = serviceScopeProperties.getScopes()
+                .getOrDefault(request.getTargetService(), Collections.emptyList());
+
+        List<String> scopes = new ArrayList<>();
+
+        if (request.getRequiredScopes() != null && !request.getRequiredScopes().isEmpty()) {
+            for (String scope : request.getRequiredScopes()) {
+                if (allowedScopes.contains(scope)) {
+                    scopes.add(scope);
+                } else {
+                    log.warn("Scope '{}' not allowed for service '{}', skipping", scope, request.getTargetService());
+                }
+            }
+            if (scopes.isEmpty()) {
+                throw new RuntimeException(
+                        "None of the requested scopes are permitted for service: " + request.getTargetService());
+            }
+        } else {
+            scopes.addAll(allowedScopes);
+        }
+
+        scopes.addAll(List.of("openid", "profile", "email"));
+        return scopes.stream().distinct().collect(Collectors.toList());
     }
 
     /**
-     * Safely convert Number to Long
+     * Validates requested roles against the allowed list for the target service.
+     * Falls back to all predefined roles only when none are explicitly requested.
      */
-    private Long getLongValue(Object number) {
-        if (number == null) return null;
-        if (number instanceof Number) {
-            return ((Number) number).longValue();
+    private List<String> determineTargetRoles(TokenDownscopeRequest request) {
+        List<String> allowedRoles = serviceScopeProperties.getRoles()
+                .getOrDefault(request.getTargetService(), Collections.emptyList());
+
+        List<String> roles = new ArrayList<>();
+
+        if (request.getRequiredRoles() != null && !request.getRequiredRoles().isEmpty()) {
+            for (String role : request.getRequiredRoles()) {
+                if (allowedRoles.contains(role)) {
+                    roles.add(role);
+                } else {
+                    log.warn("Role '{}' not allowed for service '{}', skipping", role, request.getTargetService());
+                }
+            }
+        } else {
+            roles.addAll(allowedRoles);
         }
+
+        return roles.stream().distinct().collect(Collectors.toList());
+    }
+
+    private TokenDownscopeResponse performTokenExchange(TokenDownscopeRequest request,
+                                                        List<String> scopes, List<String> roles) {
+        String tokenUrl = authServerUrl + "/realms/" + realm + "/protocol/openid-connect/token";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange");
+        body.add("client_id", clientId);
+        body.add("client_secret", clientSecret);
+        body.add("subject_token", request.getOriginalToken());
+        body.add("requested_token_type", "urn:ietf:params:oauth:token-type:jwt");
+        body.add("scope", String.join(" ", scopes));
+        body.add("audience", request.getAudience() != null ? request.getAudience() : request.getTargetService());
+
+        int expiry = defaultExpiration;
+        if (request.getExpiresIn() != null) {
+            expiry = Math.min(request.getExpiresIn(), maxExpiration);
+            if (request.getExpiresIn() > maxExpiration) {
+                log.warn("Requested expiration {}s exceeds max {}s, capping", request.getExpiresIn(), maxExpiration);
+            }
+        }
+        body.add("requested_expiration", String.valueOf(expiry));
+
         try {
-            return Long.parseLong(number.toString());
-        } catch (NumberFormatException e) {
-            log.warn("Could not convert {} to Long", number);
-            return null;
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    tokenUrl, new HttpEntity<>(body, headers), Map.class);
+
+            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+                Map<String, Object> tokenData = response.getBody();
+                return TokenDownscopeResponse.builder()
+                        .downscopedToken((String) tokenData.get("access_token"))
+                        .tokenType((String) tokenData.get("token_type"))
+                        .expiresIn(TokenUtils.toLong(tokenData.get("expires_in")))
+                        .grantedScopes(scopes)
+                        .grantedRoles(roles)
+                        .audience(request.getAudience() != null ? request.getAudience() : request.getTargetService())
+                        .targetService(request.getTargetService())
+                        .issuedAt(Instant.now().toString())
+                        .build();
+            }
+
+            throw new RuntimeException("Token exchange failed with status: " + response.getStatusCode());
+
+        } catch (HttpClientErrorException e) {
+            log.error("Token exchange failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new RuntimeException("Token exchange failed: " + e.getResponseBodyAsString());
         }
     }
 }
